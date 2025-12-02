@@ -1,0 +1,196 @@
+---
+title: "Shooting_Project_Analysis"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+## Description
+
+This dataset contains records related to shooting incidents.  
+The goal of this analysis is to import the dataset reproducibly, clean it, visualize patterns (demographic & location), and fit a simple model to explore predictors of fatal shootings.
+
+```{r setup, include=FALSE}
+# reproducible installs (only install if missing)
+packages <- c("tidyverse","readr","lubridate","hms","forcats","broom")
+installed <- packages %in% rownames(installed.packages())
+if(any(!installed)) install.packages(packages[!installed])
+
+# load libraries
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(hms)
+library(forcats)
+library(broom)
+
+# chunk options
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# reading the data
+
+shooting_data <- read_csv("NYPD_Shooting_Incident_Data__Historic_.csv", show_col_types = FALSE)
+
+# quick preview
+
+glimpse(shooting_data)
+
+# column names
+
+colnames(shooting_data)
+
+# count blank strings (""), convert to NA next
+
+sapply(shooting_data, function(x) sum(x == "", na.rm = TRUE))
+
+# count existing NA
+
+colSums(is.na(shooting_data))
+
+
+# convert blanks to NA across all character columns
+
+shooting_data <- shooting_data %>%
+mutate(across(where(is.character), ~na_if(.x, "")))
+
+# convert types and create safe factors; wrap conversions in suppressWarnings if needed
+
+## 3 Data cleaning (types, blanks -> NA, NA handling, drop unused columns)
+
+```{r cleaning}
+# convert blanks to NA across all character columns
+shooting_data <- shooting_data %>%
+  mutate(across(where(is.character), ~na_if(.x, "")))
+
+# convert types and create safe factors
+shooting_data <- shooting_data %>%
+  mutate(
+    INCIDENT_KEY = as.character(INCIDENT_KEY),
+    OCCUR_DATE = as.Date(OCCUR_DATE, format = "%m/%d/%Y"),
+    OCCUR_TIME = as_hms(OCCUR_TIME),
+    BORO = fct_na_value_to_level(as.factor(BORO), level = "Unknown"),
+    LOC_OF_OCCUR_DESC = fct_na_value_to_level(as.factor(LOC_OF_OCCUR_DESC), level = "Unknown"),
+    LOC_CLASSFCTN_DESC = fct_na_value_to_level(as.factor(LOC_CLASSFCTN_DESC), level = "Unknown"),
+    LOCATION_DESC = fct_na_value_to_level(as.factor(LOCATION_DESC), level = "Unknown"),
+    JURISDICTION_CODE = fct_na_value_to_level(as.factor(JURISDICTION_CODE), level = "Unknown"),
+    STATISTICAL_MURDER_FLAG = fct_na_value_to_level(as.factor(STATISTICAL_MURDER_FLAG), level = "Unknown"),
+    PERP_AGE_GROUP = fct_na_value_to_level(as.factor(PERP_AGE_GROUP), level = "Unknown"),
+    PERP_SEX = fct_na_value_to_level(as.factor(PERP_SEX), level = "Unknown"),
+    PERP_RACE = fct_na_value_to_level(as.factor(PERP_RACE), level = "Unknown"),
+    VIC_AGE_GROUP = fct_na_value_to_level(as.factor(VIC_AGE_GROUP), level = "Unknown"),
+    VIC_SEX = fct_na_value_to_level(as.factor(VIC_SEX), level = "Unknown"),
+    VIC_RACE = fct_na_value_to_level(as.factor(VIC_RACE), level = "Unknown"),
+    PRECINCT = suppressWarnings(as.integer(PRECINCT)),
+    Latitude = suppressWarnings(as.numeric(Latitude)),
+    Longitude = suppressWarnings(as.numeric(Longitude))
+  )
+
+# drop coordinate or redundant columns if they exist
+shooting_data <- shooting_data %>%
+  select(-any_of(c("X_COORD_CD", "Y_COORD_CD", "Lon_Lat")))
+
+# remove rows missing essential fields (date or borough)
+shooting_data <- shooting_data %>%
+  filter(!is.na(OCCUR_DATE), !is.na(BORO))
+
+# check structure and remaining missing data
+glimpse(shooting_data)
+colSums(is.na(shooting_data))
+
+
+# final structure & missing summary
+
+glimpse(shooting_data)
+colSums(is.na(shooting_data))
+
+#Visualization
+#Demographic: Victim age-group distribution
+age_dist <- shooting_data %>%
+count(VIC_AGE_GROUP, name = "count") %>%
+arrange(desc(count))
+
+ggplot(age_dist, aes(x = fct_reorder(VIC_AGE_GROUP, count), y = count, fill = VIC_AGE_GROUP)) +
+geom_col(show.legend = FALSE) +
+coord_flip() +
+labs(title = "Shooting Victims by Age Group", x = "Victim Age Group", y = "Number of Incidents") +
+theme_minimal()
+
+#4.2 Location: Yearly trends by borough
+# ensure year exists
+
+shooting_data <- shooting_data %>% mutate(year = lubridate::year(OCCUR_DATE))
+
+yearly_boro <- shooting_data %>%
+count(year, BORO, name = "count")
+
+ggplot(yearly_boro, aes(x = year, y = count, color = BORO)) +
+geom_line(size = 1) +
+geom_point(size = 1) +
+labs(title = "Yearly Shooting Trends by Borough", x = "Year", y = "Incidents", color = "Borough") +
+theme_minimal()
+```
+## 3. Analysis of the Data and Model
+
+After cleaning and visualizing the NYC shooting incidents dataset, we can analyze patterns and potential relationships among variables.
+
+### 3.1 Data Insights
+
+1. **Temporal Trends**  
+   - The number of shooting incidents has varied across years, with peaks around specific periods.  
+   - A decline in recent years may suggest improved law enforcement strategies or reporting changes.  
+   - However, external factors (like the pandemic or policy shifts) could also affect this trend.
+
+2. **Geographic Patterns**  
+   - The visualization by *borough (BORO)* showed that certain areas such as Brooklyn and the Bronx have consistently higher incident counts.  
+   - This could be influenced by differences in population density, socioeconomic conditions, or law enforcement presence.
+
+3. **Demographic Patterns**  
+   - Analysis of victim demographics shows that males and individuals aged 18–34 are disproportionately represented in shooting incidents.  
+   - Race-based distributions also reveal disparities that may reflect systemic social inequalities.
+
+---
+
+### 3.2 Model Analysis
+
+To explore which factors might influence whether a shooting results in a murder, a **logistic regression model** was fitted:
+
+```{r model-analysis}
+# Logistic regression model
+mod <- glm(STATISTICAL_MURDER_FLAG ~ VIC_SEX + VIC_AGE_GROUP + VIC_RACE + BORO,
+           data = shooting_data,
+           family = binomial)
+
+# Summarize model
+summary(mod)
+```
+### 3.2.1 Model Interpretation
+
+The logistic regression output provides **log-odds coefficients** for each predictor:
+
+- **Intercept:** Baseline log-odds of a fatal shooting when all predictors are at their reference level.
+- **Victim Sex (VIC_SEX):** Positive coefficient → shootings with male victims are more likely to be fatal than female victims.
+- **Victim Age Group (VIC_AGE_GROUP):** Positive coefficients indicate higher odds of fatality compared to the reference age group.
+- **Victim Race (VIC_RACE):** Differences in coefficients may indicate disparities, but must be interpreted cautiously due to reporting bias.
+- **Borough (BORO):** Positive coefficients indicate higher odds of fatal shootings in those boroughs relative to the reference borough.
+
+
+
+#Conclusion & sources of bias
+
+Conclusion:
+
+* Trends and borough differences are visible; demographic groups show differential representation.
+* The logistic model is exploratory and indicates associations, not causation.
+
+Sources of bias:
+
+* Reporting/recording bias: dataset contains only incidents recognized & recorded by NYPD; underreporting is possible.
+* Missingness: key demographics are sometimes missing; 'Unknown' values may cluster non-randomly.
+* Aggregation & population: counts are not normalized by population (raw counts can reflect borough size).
+* My personal bias: as analyst I might expect certain boroughs or age-groups to show higher rates. To mitigate that I used objective methods (plots and a simple model), documented choices (how 'Unknown' treated), and avoided causal claims.
+
+Recommendations:
+
+* Normalize counts by population for per-capita insights.
+* Incorporate socioeconomic or policing covariates for richer models.
+
+
